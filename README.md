@@ -65,7 +65,7 @@ $ ip link set dev eth1 up
 
 #### Configuration d'un serveur DHCP
 Installer le paquet `dnsmasq` et éditer le fichier de config `/etc/dnsmasq.conf`
-```toml
+```text
 interface=eth1
 # DHCP
 dhcp-range=192.168.100.50,192.168.100.150,255.255.255,1h
@@ -83,7 +83,7 @@ $ service dnsmasq restart
 Pour faire en sorte que la machine cliente ait accès à internet.
 ##### IP Fowarding
 Activer l'IP forwarding. Dans le fichier `/etc/sysctl.d/00-alpine.conf` ajouter la ligne
-```toml
+```text
 net.ipv4.ip_forward=1
 ```
 Changer l'option dans la configuration courrante
