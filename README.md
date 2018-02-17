@@ -8,10 +8,60 @@ Une clé bootable raspberryPi avec l'OS Alpine Linux
 
 ## Infos
 ### Package Manager
-Gestionaire de paquet: `apk`
-install: `apk add`
-search: `apk search`
-delete: `apk del`
+Gestionaire de paquet: `apk`  
+- install: `apk add`  
+- search: `apk search`  
+- delete: `apk del`  
+
+## Quickstart
+Pour obtenir un système de fichier fonctionnel (x86_64 uniquement pour le moment), un script `helper.sh` permet d'effectuer les différentes étapes d'installation à votre place.
+
+### Utilisation
+Ce script doit être lancé en tant qu'utilisateur root. 
+
+```bash
+Usage : ./helper.sh <ACTION> <WORKING_DIR>
+
+Install Alpine on the specified directory.
+
+Actions :
+    build: Install Alpine on specified directory
+    shell: Open up a shell within Alpine
+    destroy: Destroy Alpine
+
+Options :
+   WORKING_DIR: Directory to use to setup Alpine
+```
+
+###Exemple
+Pour créer une TurtleBox :
+
+```bash
+./helper.sh build ~/myturtle
+```
+
+Pour obtenir un shell dans la TurtleBox (chroot)
+
+```bash
+./helper.sh shell ~/myturtle
+```
+
+Pour détruire la TurtleBox :
+
+```
+./helper.sh destroy ~/myturtle
+```
+
+Pour installer la TurtleBox sur une clé USB  
+Notes :  
+- Il faudra au préalable partitionner la clé et y installer un bootloader.  
+- Il faudra aussi installer un noyau et éventuellement un initrd fonctionnel pour pouvoir l'utiliser.  
+
+```bash
+mount /dev/sdX /mnt
+rsync -axHv ~/myturtle/root/ /mnt 
+```
+
 
 ## Schéma
 
