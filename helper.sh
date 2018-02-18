@@ -22,7 +22,7 @@ DU_UID="501";                          # User UID
 DU_GID="${DU_UID}";                    # User GID
 
 # Network settings
-HOSTNAME="alpine"
+HOSTNAME="alpine";                     # Hostname for the machine
 DHCP_IFACE="eth0";                     # Interface plugged to a DHCP server
 CLIENT_IFACE="eth1";                   # Interface plugged to the spoofed client
 
@@ -273,6 +273,10 @@ function configure_turtlebox {
 		--root "${ROOTDIR}" \
 		--initdb \
 		add "${TURTLE_PACKAGES[@]}";
+
+	# Configure hostname
+	echo "${HOSTNAME}" > "${ROOTDIR}"/etc/hostname;
+	echo "127.0.0.1	${HOSTNAME} ${HOSTNAME}.localdomain";
 
 	info "Creating user ${DEFAULT_USER}"
 	set -e
