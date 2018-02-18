@@ -1,29 +1,53 @@
 #!/usr/bin/env bash
 
-# Sources parameters
+# -----------------------------------#
+#          Sources Settings          #
+# -----------------------------------#
 MIRROR="http://dl-cdn.alpinelinux.org/alpine";
 ARCH="x86_64";
 VERSION="v3.7";
 APK_TOOL="apk-tools-static-2.8.2-r0.apk";
 
-# TurtleBox Parameters
-DEFAULT_USER='turtle'
+# -----------------------------------#
+#        TurtleBox Parameters        #
+# -----------------------------------#
+
+# Default user settings
+DEFAULT_USER='turtle';                 # User name
+DU_GROUP="${DEFAULT_USER}";            # Group name
+DU_DESC='Turtle Default User';         # User description
+DU_HOME="/home/${DEFAULT_USER,,}";     # User home
+DU_SHELL='/bin/sh';                    # User shell
+DU_UID="501";                          # User UID
+DU_GID="${DU_UID}";                    # User GID
+
+# Network settings
+HOSTNAME="alpine"
+DHCP_IFACE="eth0";                     # Interface plugged to a DHCP server
+CLIENT_IFACE="eth1";                   # Interface plugged to the spoofed client
+
+# Spoofing settings
+DHCP_NETWORK="192.168.100.0/24";       # DHCP Range to use for the spoofed iface
+
+# Required packages
 TURTLE_PACKAGES=(
 	'sudo'
 	'dnsmasq'
 	'iptables'
 )
 
-# Comment this out to disable debugging
-DEBUG="y"
+# -----------------------------------#
+#         Debugging Settings         #
+# -----------------------------------#
+DEBUG="y";
 
 #set -o xtrace
 
-#------------------------------------------------------------------------------#
+################################################################################
 #                                                                              #
 #                               Utility functions                              #
 #                                                                              #
-#------------------------------------------------------------------------------#
+################################################################################
 
 # Print usage for this tool
 function print_usage {
@@ -67,13 +91,82 @@ function prompt_continue {
 	echo "";
 }
 
+# Convert a mask address to a CIDR
+function mask2cdr {
+	local mask="${1}";
+
+	# Table of bytes : groups of 4 chars representing 1 bit in the mask
+	local table='0ˆˆˆ128ˆ192ˆ224ˆ240^248^254^';
+
+	# Assumes there's no "255." after a non-255 byte in the mask
+	# Then lift all 255 bytes (except 4th one if so)
+	local lifted_mask="${mask##*255.}";
+
+	# Lift the table of all values >= next_byte
+	local lifted_table="${table%%${lifted_mask%%.*}*}";
+
+	# Echo total count of bits lifted
+	#   First pass : 255 value = 8 bits ==> 4 chars lifted = 8 bits lifted
+	#   Second pass : 4chars = 1 bit ==> 4 chars lifted = 1 bit lifted
+	echo "$(( ( (${#mask} - ${#lifted_mask}) * 2 )  + ( ${#lifted_table} / 4 ) ))";
+}
+
+# Convert a CIDR to a mask address
+function cdr2mask {
+	local cidr="${1}";
+
+	# How to calculate non 255 byte
+	local special_byte="( 255 << ( 8 - (${cidr} % 8) ) ) & 255";
+
+	# Build the mask within positional parameters
+	set -- '255' '255' '255' '255' "$(( ${special_byte} ))";
+
+	# Shift unused bytes to position the mask
+	shift "$(( 4 - (${cidr} / 8) ))";
+
+	# Print the mask
+	echo "${1:-0}.${2:-0}.${3:-0}.${4:-0}";
+}
+
+# Get address of network ${1} + count ${2}
+function netaddr_add {
+	local netaddr="${1}";
+	local count="${2}";
+
+	# Make bytes more accessible
+	local bytes=( ${netaddr//./ } );
+
+	# Add it
+	local x;
+	local next=${count};
+	for index in {3..0}; do
+		# Add count to current value
+		x="$(( ${bytes[${index}]} + ${next} ))";
+		# Calculate count to add to next byte
+		next="$(( ${x} / 256 ))";
+		# Calculate value
+		bytes[${index}]="$(( ${x} % 256  ))";
+	done
+
+	# Print new one
+	local res="${bytes[*]}";
+	echo "${res// /.}";
+}
+
+# Count of viable host addresses for a cidr
+function net_host_count {
+	local cidr="${1}";
+	echo "$(( 2**(32 - ${cidr} ) - 2 ))";
+}
 
 
-#------------------------------------------------------------------------------#
+
+
+################################################################################
 #                                                                              #
 #                            Build Step functions                              #
 #                                                                              #
-#------------------------------------------------------------------------------#
+################################################################################
 
 # Performs required checks for running build
 function build_checks {
@@ -103,6 +196,13 @@ function build_checks {
 		echo "          Files may be deleted in this process";
 		prompt_continue;
 	fi;
+
+	# Check if cidr >=0 <=30
+	local cidr="${DHCP_NETWORK##*/}"
+	if [ "${cidr}" -lt 0 ] || [ "${cidr}" -gt 30 ]; then
+		error "DHCP Network has an incorrect CIDR";
+		exit 1;
+	fi
 }
 
 # Create workdir and get utility files
@@ -150,9 +250,19 @@ function configure_alpine {
 
 # Configure Alpine to be a TurtleBox
 function configure_turtlebox {
-	local DU_DESC='Turtle Default User';
-	local DU_HOME="/home/${DEFAULT_USER,,}";
-	local DU_SHELL='/bin/sh';
+	# User lines for files contents
+	local du_passwd="${DEFAULT_USER,,}:x:${DU_UID}:${DU_GID}:${DU_HOME}:${DU_SHELL}:${DU_SHELL}";
+	local du_group="${DU_GROUP,,}:x:${DU_GID}:${DEFAULT_USER,,}";
+	local du_home="${ROOTDIR}/${DU_HOME}";
+
+	# DHCP settings
+	local network="${DHCP_NETWORK%%/*}";
+	local cidr="${DHCP_NETWORK##*/}";
+	local netmask="$(cdr2mask "${cidr}")";
+	local first_netaddr="$(netaddr_add "${network}" 1)";
+	local second_netaddr="$(netaddr_add "${first_netaddr}" 1)";
+	local last_netaddr="$(netaddr_add "${network}" "$(net_host_count ${cidr})")";
+	local lifted_netmask="${netmask%%.0*}";
 
 	# Install additional packages
 	info "Installing additional packages : ${TURTLE_PACKAGES[@]}";
@@ -164,53 +274,54 @@ function configure_turtlebox {
 		--initdb \
 		add "${TURTLE_PACKAGES[@]}";
 
-	# Create default User
 	info "Creating user ${DEFAULT_USER}"
 	set -e
-	echo "${DEFAULT_USER,,}:x:501:501:${DU_DESC}:${DU_HOME}:${DU_SHELL}" >> "${ROOTDIR}"/etc/passwd;
-
-	# Create his group
-	echo "${DEFAULT_USER,,}:x:501:" >> "${ROOTDIR}"/etc/group;
+	# Create user and group
+	echo "${du_passwd}" >> "${ROOTDIR}"/etc/passwd;
+	echo "${du_group}" >> "${ROOTDIR}"/etc/group;
 
 	# Create his home dir
-	mkdir -p "${ROOTDIR}/${DU_HOME}";
-	chown -R 501:501 "${ROOTDIR}/${DU_HOME}";
+	mkdir -p "${du_home}";
+	chown -R "${DU_UID}:${DU_GID}" "${du_home}";
 
 	# Configure SSH
 	info "Configuring ssh for user ${DEFAULT_USER}";
-	mkdir -p "${ROOTDIR}"/home/"${DEFAULT_USER}"/.ssh;
+	mkdir -p "${du_home}"/.ssh;
 
 	# Configure sudo
 	info "Configuring sudo for user ${DEFAULT_USER}";
 	echo "${DEFAULT_USER} ALL=(ALL) NOPASSWD: ALL" >> "${ROOTDIR}"/etc/sudoers
 
-	# Add local script running at boot
+	# Add local scripts running at boot
 	# Equivalent to 'rc-update add local boot'
-	info "Adding local script at boot"
+	info "Adding local scripts at boot"
 	ln -s '/etc/init.d/local' "${ROOTDIR}/etc/runlevels/boot"
 
 	# Configure networking
 	info "Configuring Networking"
 	cat > "${ROOTDIR}"/etc/network/interfaces <<-EOF
+		# Setup Loopback interface
 		auto lo
 		iface lo inet loopback
 
-		auto eth0
-		iface eth0 inet dhcp
-		    hostname alpine
+		# Interface plugged to a DHCP server
+		auto ${DHCP_IFACE}
+		iface ${DHCP_IFACE} inet dhcp
+		    hostname ${HOSTNAME}
 
-		auto eth1
-		iface eth1 inet static
-		    address 192.168.100.1
-		    netmask 255.255.255.0
+		# Interface plugged to the spoofed client
+		auto ${CLIENT_IFACE}
+		iface ${CLIENT_IFACE} inet static
+		    address ${first_netaddr}
+		    netmask ${netmask}
 	EOF
 
 	# Configure DNSmasq
 	info "Configuring DNSmasq"
 	sed -i "${ROOTDIR}"/etc/dnsmasq.conf \
-		-e 's/\s*#\s*interface\s*=/interface=eth1/g' \
-		-e '0,/\s*#dhcp-range\s*=/ s/\s*#\s*dhcp-range\s*=.*/dhcp-range=192.168.100.50,192.168.100.150,255.255.255,1h/' \
-		-e '0,/\s*#dhcp-option\s*=/ s/\s*#\s*dhcp-option\s*=.*/#Default Gateway\ndhcp-option=3,192.168.100.1\n#DNS Server\ndhcp-option=6,192.168.100.1/'
+		-e "s/\s*#\s*interface\s*=/interface=${CLIENT_IFACE}/g" \
+		-e "0,/\s*#dhcp-range\s*=/ s/\s*#\s*dhcp-range\s*=.*/dhcp-range=${second_netaddr},${last_netaddr},${lifted_netmask},1h/" \
+		-e "0,/\s*#dhcp-option\s*=/ s/\s*#\s*dhcp-option\s*=.*/#Default Gateway\ndhcp-option=3,${first_netaddr}\n#DNS Server\ndhcp-option=6,${first_netaddr}/";
 	ln -s '/etc/init.d/dnsmasq' "${ROOTDIR}"/etc/runlevels/boot/
 
 	# Enable IP Forwarding
@@ -219,14 +330,14 @@ function configure_turtlebox {
 
 	# Configure NAT
 	info "Configure NAT"
-	cat > "${ROOTDIR}/etc/local.d/nat.start" <<-'EOF'
+	cat > "${ROOTDIR}/etc/local.d/nat.start" <<-EOF
 		#!/bin/sh
 
 		IPTABLES='/sbin/iptables'
 
-		${IPTABLES} -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-		${IPTABLES} -A FORWARD -i eth0 -o eth1 -m state --state RELATED,ESTABLISHED -j ACCEPT
-		${IPTABLES} -A FORWARD -i eth1 -o eth0 -j ACCEPT
+		\${IPTABLES} -t nat -A POSTROUTING -o ${DHCP_IFACE} -j MASQUERADE
+		\${IPTABLES} -A FORWARD -i ${DHCP_IFACE} -o ${CLIENT_IFACE} -m state --state RELATED,ESTABLISHED -j ACCEPT
+		\${IPTABLES} -A FORWARD -i ${CLIENT_IFACE} -o ${DHCP_IFACE} -j ACCEPT
 	EOF
 	chmod +x "${ROOTDIR}/etc/local.d/nat.start";
 
@@ -236,11 +347,11 @@ function configure_turtlebox {
 
 
 
-#------------------------------------------------------------------------------#
+################################################################################
 #                                                                              #
 #                               Actions functions                              #
 #                                                                              #
-#------------------------------------------------------------------------------#
+################################################################################
 
 # Build Alpine
 function build() {
@@ -290,11 +401,11 @@ function alpine_shell() {
 
 
 
-#------------------------------------------------------------------------------#
+################################################################################
 #                                                                              #
 #                                 Main functions                               #
 #                                                                              #
-#------------------------------------------------------------------------------#
+################################################################################
 
 # Performs checks to make sure this script will run alright
 function init_checks {
