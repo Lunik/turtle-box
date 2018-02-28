@@ -74,9 +74,10 @@ dhcp-option=3,192.168.100.1
 ## dns server
 dhcp-option=6,192.168.100.1
 ```
-Redémarrer le service **dhcp**
+Redémarrer le service **dhcp** et l'activer au démarrage
 ```sh
 $ service dnsmasq restart
+$ rc-update add dnsmasq boot
 ```
 
 #### Configuration du NAT
@@ -106,7 +107,7 @@ $ chmod +x /etc/local.d/nat.start
 ```
 
 #### Finalisation
-Redémarrer le `turtl box`.
+Redémarrer le `turtle box`.
 vérifier les iptables
 ```sh
 $ iptables -L
